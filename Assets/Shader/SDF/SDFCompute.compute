@@ -1,0 +1,160 @@
+#pragma kernel main
+
+RWTexture2D<float4> result;
+float width, height;
+float3 cameraPos;
+float3 cameraDirX, cameraDirY, cameraPosLL, sunDirection;
+float4 shapeColor, shadowColor, bounceColor;
+
+float sphere(float3 p, float s)
+{
+    return length(p) - s;
+}
+
+float cone(float3 p, float h, float r1, float r2)
+{
+    float2 q = float2(length(p.xz), p.y);
+    float2 k1 = float2(r2, h);
+    float2 k2 = float2(r2 - r1, 2.0 * h);
+    float2 ca = float2(q.x - min(q.x, (q.y < 0.0) ? r1 : r2), abs(q.y) - h);
+    float2 cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
+    float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+    float d = s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+
+    return d;
+}
+
+float cylinder(float3 p, float ra, float rb, float h)
+{
+    float2 d = float2(length(p.xz) - 2.0 * ra + rb, abs(p.y) - h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - rb;
+}
+
+float box(float3 p, float3 b)
+{
+    float3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float roundBox(float3 p, float3 b, float r)
+{
+    float3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+float column(float3 p) {
+
+    float rad = 0.5;
+    rad -= 0.02 * (0.5 + 0.5 * sin(16 * atan2(p.x, p.z)));
+    float d = cone(p, 4, rad, rad - 0.2);
+    d = min(d, cylinder(p + float3(0, 0.2, 0), 0.25, 0.05, 0.015));
+    d = min(d, cylinder(p + float3(0, 0.4, 0), 0.3, 0.1, 0.05));
+    d = min(d, cylinder(p + float3(0, 0.5, 0), 0.4, 0.05, 0.02));
+    d = min(d, cylinder(p - float3(0, 4, 0), 0.175, 0.05, 0.01));
+    d = min(d, cylinder(p - float3(0, 4.1, 0), 0.17, 0.05, 0.01));
+    float off = rad - 0.1 + ((p.y - 4.35) * 0.5) / 2;
+    d = min(d, box(p - float3(0, 4.35, 0), float3(min(0.4, off), 0.2, min(off * 1.1, 0.5))));
+    d = min(d, box(p - float3(0, 4.5, 0), float3(0.4, 0.05, 0.5)));
+    return d;
+}
+
+float prism(float3 p, float2 h)
+{
+    float3 q = abs(p);
+    return max(q.z - h.y, max(q.x * 0.866025 + p.y * 0.5, -p.y) - h.x * 0.5);
+}
+
+
+float roof(float3 p) {
+
+    float rad = 0.02 * (0.5 + 0.5 * sin(256 * atan2(p.x, p.z)));
+    float d = box(p - float3(rad, 4.75, rad), float3(10.5, 0.25, 6.5));
+    d = min(d, d);
+    return d;
+}
+
+float opRepColumn(in float3 p, in float c, in float3 l)
+{
+    float3 q = p - c * clamp(round(p / c), -l, l);
+    return column(q);
+}
+
+float opRepRB(in float3 p, in float c, in float3 l)
+{
+    float3 q = p - c * clamp(round(p / c), -l, l);
+    return roundBox(q, float3(0.7, 0.2, 0.7), 0.05);
+}
+
+float map(float3 p) {
+    float dg = p.y + 1.5;
+    //float d = column(p);
+    float d = opRepColumn(p, 2, float3(5, 0, 3));
+    d = max(d, -box(p, float3(9, 5, 5)));
+    d = min(d, opRepRB(p + float3(0, 0.75, 0), 1.5, float3(7, 0, 4)));
+    d = min(d, opRepRB(p + float3(0, 1.25, 0), 1.5, float3(8, 0, 5)));
+    d = min(d, box(p, float3(7, 4.5, 3)));
+    d = min(d, roof(p));
+    d = min(d, dg);
+    return d;
+
+}
+
+float4 normal(float3 p) {
+    float2 off = float2(0.001, 0);
+    float gx = map(p + off.xyy) - map(p - off.xyy);
+    float gy = map(p + off.yxy) - map(p - off.yxy);
+    float gz = map(p + off.yyx) - map(p - off.yyx);
+    return normalize(float4(gx, gy, gz, 0));
+}
+
+float castRay(float3 ro, float3 rd) {
+    float t = 0;
+    float3 pos;
+    for (int i = 0; i < 100; i++) {
+        pos = ro + t * rd;
+        float d = map(pos);
+        if (t > 50)
+            break;
+        if (d < 0.001)
+            break;
+        t += d;
+    }
+    if (t > 50)
+        return -1;
+    return t;
+}
+
+
+
+//totalID: GroupID + GroupThreadID
+//GroupThreadID: inner ID (numthreads)
+//GroupID: Outer ID (dispatch call)
+[numthreads(32, 32, 1)]
+void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
+{
+    float2 uv = float2(totalID.x / width, totalID.y / height);
+    float3 posWSpace = cameraPosLL + uv.x * cameraDirX + uv.y * cameraDirY;
+    float3 dir = normalize(posWSpace - cameraPos);
+
+    float t = castRay(cameraPos, dir);
+
+    float4 color = float4(0.2, 0.2, 0.8, 1);                //base color
+    color -= float4(0.7, 0.7, 0.7, 1) * dir.y;              //horizon
+    if (t > 0) {
+        //base shapes
+        color = shapeColor;
+        float3 pos = cameraPos + t * dir;
+        float3 norm = normal(pos).xyz;
+        //sun highlight
+        float sh = clamp(dot(norm, -sunDirection), 0, 1);
+        color = sh * color + (1 - sh) * shadowColor;
+        //shadow cast
+        float sc = step(castRay(pos + norm * 0.001, -sunDirection), 0.0);
+        color = sc * color + (1 - sc) * shadowColor;
+        //bounce light
+        color += bounceColor * clamp(dot(norm, float3(0.0, -1.0, 0.0)), 0, 1);
+
+    }
+
+    result[totalID.xy] = color;
+}
