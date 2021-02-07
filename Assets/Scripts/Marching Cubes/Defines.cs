@@ -71,7 +71,8 @@ public class Defines
         return d;
     }
     public static float Map(Vector3 pos) {
-        return column(pos);
+        // return column(pos);
+        return sphere(pos, 0.5f);
     }
 
 

@@ -45,6 +45,8 @@ public class PlaneSetter : MonoBehaviour
         shader.SetVector("shapeColor", shapeColor);
         shader.SetVector("shadowColor", shadowColor);
         shader.SetVector("bounceColor", bounceColor);
+        shader.SetFloat("pi", 3.141592653589793f);
+        shader.SetFloat("e", 2.7182818284590451f);
     }
 
     // Update is called once per frame

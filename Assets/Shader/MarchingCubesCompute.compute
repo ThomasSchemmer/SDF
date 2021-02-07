@@ -1,0 +1,72 @@
+#pragma kernel main
+
+RWStructuredBuffer <float3> result;
+StructuredBuffer<uint> triTable;
+float3 positions[8];
+float2 edges[16];
+float3 threadSizes;
+
+float sphere(float3 p, float s) {
+    return length(p) - s;
+}
+
+float map(float3 p) {
+    return sphere(p, 0.5);
+}
+
+float3 GetVertexOnEdge(float3 center, uint edgesIndices[16], int i) {
+    //proportional offset: calculate where the value would exactly be the threshold, if we assume a linear growth
+    //this linear growth is - in most cases - wrong for SDF, but its much simpler to compute
+    float3 p0 = positions[(int)edges[edgesIndices[i]].x] + center;
+    float3 p1 = positions[(int)edges[edgesIndices[i]].y] + center;
+    float v0 = map(p0);
+    float v1 = map(p1);
+    float d = (0.5f - v0) / (v1 - v0);
+    float3 p = p0 + (p1 - p0) * d;
+    return p;
+}
+
+
+//totalID: GroupID + GroupThreadID
+//threadID: inner ID (numthreads)
+//groupID: Outer ID (dispatch call)
+[numthreads(1, 1, 1)]
+void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
+{
+    //convert 3d thread id into a sum
+    uint resultIndex = threadID.z * threadSizes.y * threadSizes.x +
+        threadID.y * threadSizes.x +
+        threadID.x;
+    int index = 0;
+    float3 center = float3(threadID.x, threadID.y, threadID.z) + float3(0.278, 0, 0);
+    uint i;
+    //get the edge index position according to the function values
+    for (i = 0; i < positions.Length; i++) {
+        float value = map(positions[i] + center);
+        index += value > 0.5 ? 1 << i : 0;
+    }
+
+    uint edgesIndices[16];
+    for (i = 0; i < edgesIndices.Length; i++) {
+        edgesIndices[i] = triTable[index * 16 + i];
+    }
+
+    float3 vertices[16];
+    for (i = 0; i < edgesIndices.Length;) {
+        if (edgesIndices[i] == -1) {
+            //clear, set to NaN
+            //if we simply break, the buffer curiosly doesnt get reset
+            result[resultIndex * 16 + i + 0] = sqrt(-1);
+            result[resultIndex * 16 + i + 1] = sqrt(-1);
+            result[resultIndex * 16 + i + 2] = sqrt(-1);
+            i += 3;
+        }
+
+        //adapt each vertex to where the value actually crosses, not just in the middle of the edge
+        result[resultIndex * 16 + i + 0]  = GetVertexOnEdge(center, edgesIndices, i);
+        result[resultIndex * 16 + i + 1]  = GetVertexOnEdge(center, edgesIndices, i + 1);
+        result[resultIndex * 16 + i + 2]  = GetVertexOnEdge(center, edgesIndices, i + 2);
+        i += 3;
+    }
+
+}
