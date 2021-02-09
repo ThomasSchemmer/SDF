@@ -39,23 +39,34 @@ public class ChunkCompute : MonoBehaviour
     public Material mat;
 
     private int kernel;
-    private ComputeBuffer triTableBuffer;
     private ComputeBuffer resultBuffer;
     private Vector3[] cubes;
+    private RenderTexture rt;
+    private Vector3 lastPos;
+    private MeshRenderer rend;
+    private MeshFilter filter;
+    private Mesh mesh;
 
-    // Start is called before the first frame update
-    void Start()
-    {
+    void Start() {
+        rend = this.gameObject.AddComponent<MeshRenderer>();
+        filter = this.gameObject.AddComponent<MeshFilter>();
+        lastPos = Vector3.one * float.MaxValue;
+        rend.material = mat;
         InitShader();
-        shader.Dispatch(kernel, 1, 1, 1);
-        resultBuffer.GetData(cubes);
-        CreateMesh();
+    }
+
+    private void Update() {
+        if ((transform.position - lastPos).magnitude > 0.01f) {
+            shader.SetVector("worldPosition", transform.position);
+            shader.Dispatch(kernel, 1, 1, 1);
+            resultBuffer.GetData(cubes);
+            CreateMesh();
+            lastPos = transform.position;
+        }
     }
 
     private void CreateMesh() {
-        MeshRenderer rend = this.gameObject.AddComponent<MeshRenderer>();
-        MeshFilter filter = this.gameObject.AddComponent<MeshFilter>();
-        Mesh mesh = new Mesh();
+        mesh = new Mesh();
         List<Vector3> vertices = new List<Vector3>();
         List<int> triangles = new List<int>();
         //we can iterate in triples, as our shader only generates triangle data
@@ -72,7 +83,6 @@ public class ChunkCompute : MonoBehaviour
         mesh.triangles = triangles.ToArray();
         mesh.RecalculateNormals();
         filter.mesh = mesh;
-        rend.material = mat;
     }
 
     private void InitShader() {
@@ -89,21 +99,50 @@ public class ChunkCompute : MonoBehaviour
     }
 
     private void ParseTriTable() {
-        triTableBuffer = new ComputeBuffer(Defines.triTable.Length * 16, sizeof(uint));
-        uint[] edges = new uint[Defines.triTable.Length * 16];
+        int[] edges = new int[Defines.triTable.Length * 16];
         int i = 0;
         foreach (int[] e in Defines.triTable) {
             for(int j = 0; j < e.Length; j++) {
-                edges[i * 16 + j] = (uint)e[j];
+                edges[i * 16 + j] = e[j];
             }
             i++; 
         }
-        triTableBuffer.SetData(edges);
-        shader.SetBuffer(kernel, "triTable", triTableBuffer);
+        shader.SetTexture(kernel, "triTex", ParseEdgesIntoTexture(edges));
+        shader.SetInt("triTexWidth", rt.width);
+    }
+
+    //if we use a StructuredBuffer for the 16*256 uint edge indices, we very quickly pass 
+    //the recommended amount of registers for eacah shader thread (~16k)
+    //to go around that, simply merge all indices into a texture and pass that along
+    //unfortunately, shader can't access simple texture2d, only render textures
+    //so we create a tex2d, copy it into the rt, and pass that
+    //update: nevermind, same reaction with an rt.. 
+    private RenderTexture ParseEdgesIntoTexture(int[] edges) {
+        Color[] colors = new Color[edges.Length / 4];
+        for(int i = 0; i < colors.Length; i++) {
+            //unity color only ranges internally from 0..1. So we scale our edge id with 256
+            //we cannot pass the "edge not set" identifier "-1" into the color, as it will be cut off
+            //within unity. NaN doesn't work as well. as Defines.TriEdgeTable has only entries to ~12
+            //we set it to an approriately higher number
+            colors[i] = new Color(  edges[i * 4 + 0] >= 0 ? edges[i * 4 + 0] / 256f : 20 / 256f,
+                                    edges[i * 4 + 1] >= 0 ? edges[i * 4 + 1] / 256f : 20 / 256f,
+                                    edges[i * 4 + 2] >= 0 ? edges[i * 4 + 2] / 256f : 20 / 256f,
+                                    edges[i * 4 + 3] >= 0 ? edges[i * 4 + 3] / 256f : 20 / 256f);
+        }
+        int size = Mathf.CeilToInt(Mathf.Sqrt(edges.Length / 4));
+        Texture2D tex = new Texture2D(size, size, TextureFormat.ARGB32, 1, false);
+        tex.SetPixels(colors);
+        tex.Apply();
+        rt = RenderTexture.GetTemporary(size, size, 1, RenderTextureFormat.ARGB32);
+        rt.enableRandomWrite = true;
+
+        Graphics.CopyTexture(tex, rt);
+        Destroy(tex);
+        return rt;
     }
 
     private void OnApplicationQuit() {
-        triTableBuffer.Dispose();
         resultBuffer.Dispose();
+        RenderTexture.ReleaseTemporary(rt);
     }
 }

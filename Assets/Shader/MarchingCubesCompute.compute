@@ -1,10 +1,12 @@
 #pragma kernel main
 
 RWStructuredBuffer <float3> result;
-StructuredBuffer<uint> triTable;
+Texture2D<float4> triTex;
 float3 positions[8];
 float2 edges[16];
 float3 threadSizes;
+float3 worldPosition;
+uint triTexWidth;
 
 float sphere(float3 p, float s) {
     return length(p) - s;
@@ -30,7 +32,7 @@ float3 GetVertexOnEdge(float3 center, uint edgesIndices[16], int i) {
 //totalID: GroupID + GroupThreadID
 //threadID: inner ID (numthreads)
 //groupID: Outer ID (dispatch call)
-[numthreads(1, 1, 1)]
+[numthreads(8, 8, 8)]
 void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
 {
     //convert 3d thread id into a sum
@@ -38,7 +40,7 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
         threadID.y * threadSizes.x +
         threadID.x;
     int index = 0;
-    float3 center = float3(threadID.x, threadID.y, threadID.z) + float3(0.278, 0, 0);
+    float3 center = float3(threadID.x, threadID.y, threadID.z) + worldPosition;
     uint i;
     //get the edge index position according to the function values
     for (i = 0; i < positions.Length; i++) {
@@ -48,7 +50,21 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
 
     uint edgesIndices[16];
     for (i = 0; i < edgesIndices.Length; i++) {
-        edgesIndices[i] = triTable[index * 16 + i];
+        //each color pixel has 4 values, which were directly written to from the edge table
+        //reverse the indexing to look up the vPos value
+        uint vPos = index * 16 + i;
+        uint colorPos = vPos / 4;
+        uint remainder = fmod(vPos, 4);
+        float2 uv = float2(fmod(colorPos, triTexWidth), colorPos / triTexWidth);
+        float4 color = triTex[uv];
+        //rescale with 256 to get an actual edge id from the range 0..1
+        uint edgeValue =    remainder == 0 ? color.x * 256:
+                            remainder == 1 ? color.y * 256:
+                            remainder == 2 ? color.z * 256:
+                            remainder == 3 ? color.w * 256: -1;
+        //check for error state
+        edgeValue = edgeValue >= 19 ? -1 : edgeValue;
+        edgesIndices[i] = edgeValue;
     }
 
     float3 vertices[16];
@@ -63,9 +79,9 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
         }
 
         //adapt each vertex to where the value actually crosses, not just in the middle of the edge
-        result[resultIndex * 16 + i + 0]  = GetVertexOnEdge(center, edgesIndices, i);
-        result[resultIndex * 16 + i + 1]  = GetVertexOnEdge(center, edgesIndices, i + 1);
-        result[resultIndex * 16 + i + 2]  = GetVertexOnEdge(center, edgesIndices, i + 2);
+        result[resultIndex * 16 + i + 0]  = GetVertexOnEdge(center, edgesIndices, i) - worldPosition;
+        result[resultIndex * 16 + i + 1]  = GetVertexOnEdge(center, edgesIndices, i + 1) - worldPosition;
+        result[resultIndex * 16 + i + 2]  = GetVertexOnEdge(center, edgesIndices, i + 2) - worldPosition;
         i += 3;
     }
 

@@ -9,7 +9,7 @@ public class Ivy : MonoBehaviour
 
     Mesh mesh;
     MeshFilter filter;
-    MeshRenderer renderer;
+    new MeshRenderer renderer;
 
 
     float width = 0.01f;
