@@ -16,6 +16,7 @@ float map(float3 p) {
     return sphere(p, 0.5);
 }
 
+
 float3 GetVertexOnEdge(float3 center, uint edgesIndices[16], int i) {
     //proportional offset: calculate where the value would exactly be the threshold, if we assume a linear growth
     //this linear growth is - in most cases - wrong for SDF, but its much simpler to compute
@@ -29,16 +30,18 @@ float3 GetVertexOnEdge(float3 center, uint edgesIndices[16], int i) {
 }
 
 
+//TODO: Move triTex into groupshared memory, but squashed. Should enable more threads per group
 //totalID: GroupID + GroupThreadID
 //threadID: inner ID (numthreads)
 //groupID: Outer ID (dispatch call)
-[numthreads(8, 8, 8)]
+[numthreads(4, 4, 4)]
 void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
 {
     //convert 3d thread id into a sum
     uint resultIndex = threadID.z * threadSizes.y * threadSizes.x +
         threadID.y * threadSizes.x +
         threadID.x;
+
     int index = 0;
     float3 center = float3(threadID.x, threadID.y, threadID.z) + worldPosition;
     uint i;
@@ -50,8 +53,6 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
 
     uint edgesIndices[16];
     for (i = 0; i < edgesIndices.Length; i++) {
-        //each color pixel has 4 values, which were directly written to from the edge table
-        //reverse the indexing to look up the vPos value
         uint vPos = index * 16 + i;
         uint colorPos = vPos / 4;
         uint remainder = fmod(vPos, 4);
@@ -63,8 +64,7 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
                             remainder == 2 ? color.z * 256:
                             remainder == 3 ? color.w * 256: -1;
         //check for error state
-        edgeValue = edgeValue >= 19 ? -1 : edgeValue;
-        edgesIndices[i] = edgeValue;
+        edgesIndices[i] = edgeValue >= 19 ? -1 : edgeValue;
     }
 
     float3 vertices[16];
