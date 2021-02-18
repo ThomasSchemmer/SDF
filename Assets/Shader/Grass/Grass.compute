@@ -3,7 +3,7 @@
 
 RWStructuredBuffer<float3> vertexBuffer;
 RWStructuredBuffer<float3> grassBuffer;
-RWStructuredBuffer<int> triangles;
+RWStructuredBuffer<int> triangleBuffer;
 RWStructuredBuffer<float2> uvs;
 
 uint verticesSize;
@@ -42,6 +42,7 @@ float random(float2 uv)
 //totalID: GroupID + GroupThreadID
 //threadID: inner ID (numthreads)
 //groupID: Outer ID (dispatch call)
+//create a basic grid mesh, that is slightly offset with perlin noise. Height is also purely perlin noise dependant
 [numthreads(16, 1, 16)]
 void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
 {
@@ -64,12 +65,15 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
 
 /* 
     create the grass strips, one per each vertex
-    each grass consists of max 6*2 vertices, depending on LOD. Smallest design:
+    each grass consists of 5*2 vertices. Smallest design:
    3 |\---|1
      | \  |
      |  \ |
    2 |___\|0
-    It gets turned so that it is orthogonal to the viewing direction
+    It gets turned so that it is orthogonal to the viewing direction.
+    Mesh vertices are stored in order of input mesh positions, each input vertex represents 2 sides of 
+    grass blade, each having 5 vertices
+
 */
 
 [numthreads(16, 1, 16)]
@@ -79,21 +83,32 @@ void update(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThread
         threadID.y * 16 +
         threadID.x;
     uint amountPerThread = verticesSize / (16 * 16);
-    float3 right = cross(camForward, float3(0, 1, 0));
+    float3 forward = normalize(vertexBuffer[index * amountPerThread] - camPos);
+    float3 right = normalize(cross(forward, float3(0, 1, 0))) * 0.02;
     float3 up = float3(0, 1, 0);
-    //indicate unused vertex positions, so we dont resize the buffer
-    float3 error = float3(sqrt(-1), sqrt(-1), sqrt(-1));
 
     for (uint i = 0; i < amountPerThread; i++) {
         uint indexI = index * amountPerThread + i;
         float3 pos = vertexBuffer[indexI];
-        uint lod = length(vertexBuffer[indexI] - camPos) < 10 ? 0 : 1;
-        float resolution = lod == 0 ? 5.0 : 2.0;
-        for (uint j = 0; j < 5; j++) {
+        float resolution = 5.0;
+        uint j;
+        for (j = 0; j < 5; j++) {
+            //each grass has 2 sides a 5 vertices
             uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
-            float y = j / (resolution - 1.0);
-            grassBuffer[gPos] = (int)j < resolution ? right * 0.5 + up * y + pos : error;
-            grassBuffer[gPos + 5] = (int)j < resolution ? -right * 0.5 + up * y + pos : error;
+            float y = j / (resolution - 1.0) * 2;
+            grassBuffer[gPos] = right + up * y + pos;
+            grassBuffer[gPos + 5] = -right + up * y + pos;
+        }
+        for (j = 0; j < 4; j++) {
+            //each grass has 2 triangles (6 indices) times 4 sections
+            uint tPos = index * amountPerThread * 4 * 6 + i * 4 * 6 + j;
+            uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
+            triangleBuffer[tPos + 0] = gPos + 0;
+            triangleBuffer[tPos + 1] = gPos + 1;
+            triangleBuffer[tPos + 2] = gPos + 6;
+            triangleBuffer[tPos + 3] = gPos + 0;
+            triangleBuffer[tPos + 4] = gPos + 6;
+            triangleBuffer[tPos + 5] = gPos + 5;
         }
     }
 }

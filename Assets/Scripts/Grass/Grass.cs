@@ -1,100 +1,81 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class Grass : MonoBehaviour
 {
-    public ComputeShader shader;
+    public ComputeShader computeShader;
     public Material mat;
 
     private ComputeBuffer vertexBuffer;
     private ComputeBuffer grassBuffer;
+    private ComputeBuffer drawArgsBuffer;
+
+    private GraphicsBuffer triangleBuffer;
+
     private int kMain, kUpdate;
-    private int amountOfVertices = 512;
+    private int amountOfVertices = 256;
 
-    private Vector3[] vertices;
-    private Vector3[] grass;
-
-    private MeshFilter filter;
-    private MeshRenderer rend;
-    private Mesh mesh;
     private Camera cam;
 
-    // Start is called before the first frame update
     void Start()
     {
-        filter = gameObject.AddComponent<MeshFilter>();
-        rend = gameObject.AddComponent<MeshRenderer>();
         cam = Camera.main;
-        LoadVertices();
-        CreateMesh();
-        CreateGrass();
-
+        SetShadersAndBuffer();
     }
 
-    // update the grass
-    void Update()
-    {
-    }
 
-    private void CreateGrass() {
+    private void SetShadersAndBuffer() {
 
-        shader.SetVector("camPos", cam.transform.position);
-        shader.SetVector("camForward", cam.transform.forward);
-        grassBuffer = new ComputeBuffer(amountOfVertices * 5 * 2, sizeof(float) * 3);
-        grass = new Vector3[amountOfVertices * 5 * 2];
-        shader.SetBuffer(kUpdate, "vertexBuffer", vertexBuffer);
-        shader.SetBuffer(kUpdate, "grassBuffer", grassBuffer);
-        shader.Dispatch(kUpdate, 1, 1, 1);
-        grassBuffer.GetData(grass);
+        kMain = computeShader.FindKernel("main");
+        kUpdate = computeShader.FindKernel("update");
 
-        Mesh mesh = new Mesh();
-        List<Vector3> truncs = new List<Vector3>();
-        foreach(Vector3 vec in grass) {
-            if (!float.IsNaN(vec.x))
-                truncs.Add(vec);
-        }
-        Vector3[] truncArr = truncs.ToArray();
-        int[] indices = new int[truncArr.Length];
-        for (int i = 0; i < truncArr.Length; i++) {
-            indices[i] = i;
-        }
-        mesh.vertices = truncArr;
-        mesh.SetIndices(indices, MeshTopology.Points, 0);
-        mesh.RecalculateBounds();
-        GameObject child = new GameObject();
-        child.AddComponent<MeshFilter>().mesh = mesh;
-        child.AddComponent<MeshRenderer>().material = mat;
-    }
-
-    private void CreateMesh() {
-        int[] indices = new int[vertices.Length];
-        for(int i = 0; i < vertices.Length; i++) {
-            indices[i] = i;
-        }
-        if (!mesh)
-            mesh = new Mesh();
-        mesh.vertices = vertices;
-        mesh.SetIndices(indices, MeshTopology.Points, 0);
-        mesh.RecalculateBounds();
-        filter.mesh = mesh;
-        rend.material = mat;
-    }
-
-    private void LoadVertices() {
-        kMain = shader.FindKernel("main");
-        kUpdate = shader.FindKernel("update");
+        computeShader.SetInt("verticesSize", amountOfVertices);
+        computeShader.SetFloat("desiredSize", 10f);
+        computeShader.SetVector("camPos", cam.transform.position);
+        computeShader.SetVector("camForward", cam.transform.forward);
+        //stores the base mesh vertices
         vertexBuffer = new ComputeBuffer(amountOfVertices, sizeof(float) * 3);
-        vertices = new Vector3[amountOfVertices];
-        shader.SetInt("verticesSize", amountOfVertices);
-        shader.SetFloat("desiredSize", 10f);
-        shader.SetBuffer(kMain, "vertexBuffer", vertexBuffer);
-        shader.Dispatch(kMain, 1, 1, 1);
-        vertexBuffer.GetData(vertices);
+        //stores the actual grass mesh vertices
+        grassBuffer = new ComputeBuffer(amountOfVertices * 5 * 2, sizeof(float) * 3);
+
+        //vertex count, instance count, vertex start location, instance start location
+        drawArgsBuffer = new ComputeBuffer(4, sizeof(int), ComputeBufferType.IndirectArguments);
+        drawArgsBuffer.SetData(new int[] { amountOfVertices * 5 * 2, 1, 0, 0 });
+
+        triangleBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index | GraphicsBuffer.Target.Structured, amountOfVertices * 4 * 6, sizeof(int));
+
+        computeShader.SetBuffer(kMain, "vertexBuffer", vertexBuffer);
+        computeShader.SetBuffer(kUpdate, "vertexBuffer", vertexBuffer);
+        computeShader.SetBuffer(kUpdate, "grassBuffer", grassBuffer);
+        computeShader.SetBuffer(kUpdate, "triangleBuffer", triangleBuffer);
+
+        //generate the base mesh
+        computeShader.Dispatch(kMain, 1, 1, 1);
     }
 
-    private void OnApplicationQuit() {
+    private void Update() {
+        computeShader.Dispatch(kUpdate, 1, 1, 1);
+        int[] triangles = new int[amountOfVertices * 4 * 6];
+        Vector3[] vertices = new Vector3[amountOfVertices * 5 * 2];
+        grassBuffer.GetData(vertices);
+        triangleBuffer.GetData(triangles);
+    }
+
+    private void OnRenderObject() {
+        mat.SetPass(0);
+        mat.SetBuffer("vertices", grassBuffer);
+        // Graphics.DrawProceduralIndirect(mat, new Bounds(Vector3.zero, new Vector3(10, 10, 10)), MeshTopology.Points, triangleBuffer, drawArgsBuffer);
+        // Graphics.DrawProceduralIndirectNow(MeshTopology.Points, triangleBuffer, drawArgsBuffer);
+        Graphics.DrawProceduralNow(MeshTopology.Points, amountOfVertices * 5 * 2);
+    }
+
+
+    private void OnDisable() {
         vertexBuffer.Release();
         grassBuffer.Release();
+        triangleBuffer.Release();
+        drawArgsBuffer.Release();
     }
 }
