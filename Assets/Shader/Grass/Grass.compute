@@ -1,5 +1,6 @@
-#pragma kernel main
-#pragma kernel update
+#pragma kernel createPositions
+#pragma kernel createBase
+#pragma kernel updateBase
 
 RWStructuredBuffer<float3> vertexBuffer;
 RWStructuredBuffer<float3> grassBuffer;
@@ -44,7 +45,7 @@ float random(float2 uv)
 //groupID: Outer ID (dispatch call)
 //create a basic grid mesh, that is slightly offset with perlin noise. Height is also purely perlin noise dependant
 [numthreads(16, 1, 16)]
-void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
+void createPositions(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
 {
     uint index = threadID.z * 1 * 16 +
         threadID.y * 16 +
@@ -77,7 +78,7 @@ void main(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID
 */
 
 [numthreads(16, 1, 16)]
-void update(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
+void createBase(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
 {
     uint index = threadID.z * 1 * 16 +
         threadID.y * 16 +
@@ -101,7 +102,7 @@ void update(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThread
         }
         for (j = 0; j < 4; j++) {
             //each grass has 2 triangles (6 indices) times 4 sections
-            uint tPos = index * amountPerThread * 4 * 6 + i * 4 * 6 + j;
+            uint tPos = index * amountPerThread * 4 * 6 + i * 4 * 6 + j * 6;
             uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
             triangleBuffer[tPos + 0] = gPos + 0;
             triangleBuffer[tPos + 1] = gPos + 1;
@@ -113,6 +114,36 @@ void update(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThread
     }
 }
 
+
+//update the rotation and angle of the blades according to camera position/angle
+//also add a bending according to a simulated wind with perlin noise (due to local coherency)
+[numthreads(16, 1, 16)]
+void updateBase(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID) {
+    uint index = threadID.z * 1 * 16 +
+        threadID.y * 16 +
+        threadID.x;
+    uint amountPerThread = verticesSize / (16 * 16);
+    float3 forward = normalize(vertexBuffer[index * amountPerThread] - camPos);
+    float3 right = normalize(cross(forward, float3(0, 1, 0))) * 0.02;
+    float3 up = float3(0, 1, 0);
+
+    for (uint i = 0; i < amountPerThread; i++) {
+        uint indexI = index * amountPerThread + i;
+        float3 pos = vertexBuffer[indexI];
+        float resolution = 5.0;
+        uint j;
+        float pX = perlin(float3(pos.x, 0.1, pos.z));
+        float pZ = perlin(float3(pos.z, 0.1, pos.x));
+        float3 offset = float3(pX, 0, pZ);
+
+        for (j = 0; j < 5; j++) {
+            uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
+            float y = j / (resolution - 1.0) * 2;
+            grassBuffer[gPos] = right + up * y + pos + offset * y;
+            grassBuffer[gPos + 5] = -right + up * y + pos + offset * y;
+        }
+    }
+}
 
 
 // ------------------------ PERLIN NOISE FUNCTION -----------------------------------

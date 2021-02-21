@@ -14,8 +14,8 @@ public class Grass : MonoBehaviour
 
     private GraphicsBuffer triangleBuffer;
 
-    private int kMain, kUpdate;
-    private int amountOfVertices = 256;
+    private int kCreatePositions, kCreateBase, kUpdateBase;
+    private int amountOfVertices = 4096;
 
     private Camera cam;
 
@@ -28,8 +28,9 @@ public class Grass : MonoBehaviour
 
     private void SetShadersAndBuffer() {
 
-        kMain = computeShader.FindKernel("main");
-        kUpdate = computeShader.FindKernel("update");
+        kCreatePositions = computeShader.FindKernel("createPositions");
+        kCreateBase = computeShader.FindKernel("createBase");
+        kUpdateBase = computeShader.FindKernel("updateBase");
 
         computeShader.SetInt("verticesSize", amountOfVertices);
         computeShader.SetFloat("desiredSize", 10f);
@@ -37,7 +38,8 @@ public class Grass : MonoBehaviour
         computeShader.SetVector("camForward", cam.transform.forward);
         //stores the base mesh vertices
         vertexBuffer = new ComputeBuffer(amountOfVertices, sizeof(float) * 3);
-        //stores the actual grass mesh vertices
+        //stores the grass mesh vertices, updated each frame
+        //we have to recaluclate the orientation each frame if the camera movess
         grassBuffer = new ComputeBuffer(amountOfVertices * 5 * 2, sizeof(float) * 3);
 
         //vertex count, instance count, vertex start location, instance start location
@@ -46,30 +48,46 @@ public class Grass : MonoBehaviour
 
         triangleBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index | GraphicsBuffer.Target.Structured, amountOfVertices * 4 * 6, sizeof(int));
 
-        computeShader.SetBuffer(kMain, "vertexBuffer", vertexBuffer);
-        computeShader.SetBuffer(kUpdate, "vertexBuffer", vertexBuffer);
-        computeShader.SetBuffer(kUpdate, "grassBuffer", grassBuffer);
-        computeShader.SetBuffer(kUpdate, "triangleBuffer", triangleBuffer);
+        computeShader.SetBuffer(kCreatePositions, "vertexBuffer", vertexBuffer);
+        computeShader.SetBuffer(kCreateBase, "vertexBuffer", vertexBuffer);
+        computeShader.SetBuffer(kCreateBase, "grassBuffer", grassBuffer);
+        computeShader.SetBuffer(kCreateBase, "triangleBuffer", triangleBuffer);
+        computeShader.SetBuffer(kUpdateBase, "vertexBuffer", vertexBuffer);
+        computeShader.SetBuffer(kUpdateBase, "grassBuffer", grassBuffer);
+        mat.SetBuffer("vertices", grassBuffer);
 
-        //generate the base mesh
-        computeShader.Dispatch(kMain, 1, 1, 1);
+        //generate the positions mesh and the base grass mesh
+        computeShader.Dispatch(kCreatePositions, 1, 1, 1);
+        computeShader.Dispatch(kCreateBase, 1, 1, 1);
+
     }
 
-    private void Update() {
-        computeShader.Dispatch(kUpdate, 1, 1, 1);
+    private void CreateDebugMesh() {
         int[] triangles = new int[amountOfVertices * 4 * 6];
         Vector3[] vertices = new Vector3[amountOfVertices * 5 * 2];
         grassBuffer.GetData(vertices);
         triangleBuffer.GetData(triangles);
+        Mesh mesh = new Mesh();
+        mesh.vertices = vertices;
+        mesh.triangles = triangles;
+        mesh.RecalculateBounds();
+
+        gameObject.AddComponent<MeshRenderer>();
+        gameObject.AddComponent<MeshFilter>().mesh = mesh;
     }
+
+    private void Update() {
+        computeShader.SetVector("camPos", cam.transform.position);
+        computeShader.SetVector("camForward", cam.transform.forward);
+        computeShader.Dispatch(kUpdateBase, 1, 1, 1);
+    }
+
 
     private void OnRenderObject() {
         mat.SetPass(0);
-        mat.SetBuffer("vertices", grassBuffer);
-        // Graphics.DrawProceduralIndirect(mat, new Bounds(Vector3.zero, new Vector3(10, 10, 10)), MeshTopology.Points, triangleBuffer, drawArgsBuffer);
-        // Graphics.DrawProceduralIndirectNow(MeshTopology.Points, triangleBuffer, drawArgsBuffer);
-        Graphics.DrawProceduralNow(MeshTopology.Points, amountOfVertices * 5 * 2);
+        Graphics.DrawProceduralNow(MeshTopology.Triangles, triangleBuffer, amountOfVertices * 6 * 4);
     }
+
 
 
     private void OnDisable() {
