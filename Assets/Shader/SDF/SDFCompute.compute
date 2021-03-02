@@ -86,6 +86,7 @@ float opRepRB(in float3 p, in float c, in float3 l)
 }
 
 float map(float3 p) {
+    return column(p);
     float dg = p.y + 1.5;
     //float d = column(p);
     float d = opRepColumn(p, 2, float3(5, 0, 3));

@@ -1,9 +1,14 @@
 #pragma kernel createPositions
-#pragma kernel createBase
 #pragma kernel updateBase
 
+struct Vertex {
+    float3 position;
+    float3 normal;
+    float2 uv;
+};
+
 RWStructuredBuffer<float3> vertexBuffer;
-RWStructuredBuffer<float3> grassBuffer;
+RWStructuredBuffer<Vertex> grassBuffer;
 RWStructuredBuffer<int> triangleBuffer;
 RWStructuredBuffer<float2> uvs;
 
@@ -11,6 +16,7 @@ uint verticesSize;
 float desiredSize;
 float3 camForward;
 float3 camPos;
+float3 lightPos;
 
 float perlin(float3 worldPos); 
 float perlinLoop(float3 worldPos, float Frequency, float Amplitude);
@@ -34,6 +40,7 @@ groupshared uint p[256] = { 151,160,137,91,90,15,
     49,192,214, 31,181,199,106,157,184, 84,204,176,115,121,50,45,127, 4,150,254,
     138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180
 };
+
 
 float random(float2 uv)
 {
@@ -60,7 +67,20 @@ void createPositions(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_Gr
         float3 percPos = float3(x * desiredSize / width, 0.01, z * desiredSize / width);
         
         float p = perlinLoop(percPos, 2, 4);
-        vertexBuffer[indexI] = float3(percPos.x + p, p * 2 - 1, percPos.z - p);
+        vertexBuffer[indexI] = float3(percPos.x + p * 10, p * 2, percPos.z - p * 10);
+
+        for (uint j = 0; j < 4; j++) {
+            //each grass has 2 triangles (6 indices) times 4 sections
+            uint tPos = index * amountPerThread * 4 * 6 + i * 4 * 6 + j * 6;
+            uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
+
+            triangleBuffer[tPos + 0] = gPos + 0;
+            triangleBuffer[tPos + 1] = gPos + 1;
+            triangleBuffer[tPos + 2] = gPos + 6;
+            triangleBuffer[tPos + 3] = gPos + 0;
+            triangleBuffer[tPos + 4] = gPos + 6;
+            triangleBuffer[tPos + 5] = gPos + 5;
+        }
     }
 }
 
@@ -74,47 +94,9 @@ void createPositions(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_Gr
     It gets turned so that it is orthogonal to the viewing direction.
     Mesh vertices are stored in order of input mesh positions, each input vertex represents 2 sides of 
     grass blade, each having 5 vertices
-
+    UV calculation: left side is x = 0, right side x = 1. Bottom is y = 0, top is y = 1
+    We have to rotate the grass orthogonal towards the viewing direction, otherwise it will simply be skipped
 */
-
-[numthreads(16, 1, 16)]
-void createBase(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupThreadID, uint3 groupID : SV_GroupID)
-{
-    uint index = threadID.z * 1 * 16 +
-        threadID.y * 16 +
-        threadID.x;
-    uint amountPerThread = verticesSize / (16 * 16);
-    float3 forward = normalize(vertexBuffer[index * amountPerThread] - camPos);
-    float3 right = normalize(cross(forward, float3(0, 1, 0))) * 0.02;
-    float3 up = float3(0, 1, 0);
-
-    for (uint i = 0; i < amountPerThread; i++) {
-        uint indexI = index * amountPerThread + i;
-        float3 pos = vertexBuffer[indexI];
-        float resolution = 5.0;
-        uint j;
-        for (j = 0; j < 5; j++) {
-            //each grass has 2 sides a 5 vertices
-            uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
-            float y = j / (resolution - 1.0) * 2;
-            grassBuffer[gPos] = right + up * y + pos;
-            grassBuffer[gPos + 5] = -right + up * y + pos;
-        }
-        for (j = 0; j < 4; j++) {
-            //each grass has 2 triangles (6 indices) times 4 sections
-            uint tPos = index * amountPerThread * 4 * 6 + i * 4 * 6 + j * 6;
-            uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
-            triangleBuffer[tPos + 0] = gPos + 0;
-            triangleBuffer[tPos + 1] = gPos + 1;
-            triangleBuffer[tPos + 2] = gPos + 6;
-            triangleBuffer[tPos + 3] = gPos + 0;
-            triangleBuffer[tPos + 4] = gPos + 6;
-            triangleBuffer[tPos + 5] = gPos + 5;
-        }
-    }
-}
-
-
 //update the rotation and angle of the blades according to camera position/angle
 //also add a bending according to a simulated wind with perlin noise (due to local coherency)
 [numthreads(16, 1, 16)]
@@ -129,19 +111,43 @@ void updateBase(uint3 totalID : SV_DispatchThreadID, uint3 threadID : SV_GroupTh
 
     for (uint i = 0; i < amountPerThread; i++) {
         uint indexI = index * amountPerThread + i;
-        float3 pos = vertexBuffer[indexI];
+        float3 rootPos = vertexBuffer[indexI];
         float resolution = 5.0;
-        uint j;
-        float pX = perlin(float3(pos.x, 0.1, pos.z));
-        float pZ = perlin(float3(pos.z, 0.1, pos.x));
-        float3 offset = float3(pX, 0, pZ);
+        float height = 2.0;
+        float pX = perlin(float3(rootPos.x, 0.1, rootPos.z));
+        float pZ = perlin(float3(rootPos.z, 0.1, rootPos.x));
+        float3 offset = -float3(pX, 0, pZ);
+        float3 orth = normalize(cross(offset, float3(0, 1, 0)));
+        float3 normal = float3(0, 0, 0);
 
-        for (j = 0; j < 5; j++) {
+        for (uint j = 0; j < 5; j++) {
+            //each grass has 2 sides a 5 vertices
             uint gPos = index * amountPerThread * 5 * 2 + i * 5 * 2 + j;
-            float y = j / (resolution - 1.0) * 2;
-            grassBuffer[gPos] = right + up * y + pos + offset * y;
-            grassBuffer[gPos + 5] = -right + up * y + pos + offset * y;
+            float y = j / (resolution - 1.0);
+            float nextY = (j + 1) / (resolution - 1.0);
+
+            float3 vertexPos = rootPos + up * y * height + offset * y * y;
+            float3 nextVertexPos = rootPos + up * nextY * height + offset * nextY * nextY;
+            //normal calculation takes the vertex left to and the one above the current vertex
+            //the last vertex of each row just takes the previous normal values
+
+            normal = j < 4 ?
+                cross(normalize(nextVertexPos + orth - vertexPos), normalize(nextVertexPos - vertexPos))
+                : normal;
+
+            Vertex leftVertex, rightVertex;
+            rightVertex.position = vertexPos + right * (1.1 - y * y);
+            leftVertex.position = vertexPos - right * (1.1 - y * y);
+            rightVertex.normal = normal;
+            leftVertex.normal = normal;
+            rightVertex.uv = float2(1, y);
+            leftVertex.uv = float2(0, y);
+
+            grassBuffer[gPos] = rightVertex;
+            grassBuffer[gPos + 5] = leftVertex;
+
         }
+
     }
 }
 
@@ -203,6 +209,4 @@ float perlinLoop(float3 worldPos, float Frequency, float Amplitude) {
     }
     return total / maxValue;
 }
-
-
 
