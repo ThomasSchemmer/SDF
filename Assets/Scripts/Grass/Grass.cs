@@ -2,24 +2,31 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.UI;
 
 public class Grass : MonoBehaviour
 {
-    public ComputeShader computeShader;
+    public ComputeShader grassComputeShader, perlinComputeShader;
     public RenderTexture debug;
     public Material mat;
-    public Light light;
+    public new Light light;
+    public Texture2D myTex;
     
     private ComputeBuffer vertexBuffer;
     private ComputeBuffer grassBuffer;
     private ComputeBuffer drawArgsBuffer;
 
     private GraphicsBuffer triangleBuffer;
+    private Vector3 position = new Vector3(1, 0, 1);
 
-    private int kCreatePositions, kUpdateBase;
-    private int amountOfVertices = 4096;
+    private int kCreatePositions, kUpdateBase, kPerlin;
+    private const int size = 32;
+    private int amountOfVertices = size * size;
+    private float desiredSize = 10;
+    private Vector2 offset = new Vector2(0.25f, -0.3f);
 
     private Camera cam;
+    private RenderTexture shadowMapRT, perlinRT;
 
     struct Vertex {
         public Vector3 position;
@@ -33,49 +40,60 @@ public class Grass : MonoBehaviour
     void Start()
     {
         cam = Camera.main;
+        Perlin();
         SetShadersAndBuffer();
-        if (cam.renderingPath == RenderingPath.DeferredShading) {
-            cameraCommandBuffer = new CommandBuffer();
-            cameraCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 0, MeshTopology.Triangles, amountOfVertices * 6 * 4);
-            cam.AddCommandBuffer(CameraEvent.BeforeGBuffer, cameraCommandBuffer);
-            
-            lightCommandBuffer = new CommandBuffer();
-            lightCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 1, MeshTopology.Triangles, amountOfVertices * 6 * 4);
-            //TODO: create shadow map twice, once with and once without the grass
-            //grass should not get self shadow, as it is blocky and ugly
-            //see unity light examples for custom shadow casting?
-           // light.AddCommandBuffer(LightEvent.BeforeShadowMapPass, lightCommandBuffer);
+        ShowDebug();
 
-            //copy shadow texture from lightsource into debug tex
-            //this way we can make it a global texture and easily access it in our shader
-            CommandBuffer shadowMapCommandBuffer = new CommandBuffer();
-            RenderTargetIdentifier shadowMap = BuiltinRenderTextureType.CurrentActive;
-            RenderTexture shadowMapCopy = debug;
-            shadowMapCommandBuffer.SetShadowSamplingMode(shadowMap, ShadowSamplingMode.RawDepth);
-            var id = new RenderTargetIdentifier(shadowMapCopy);
-           // shadowMapCommandBuffer.Blit(shadowMap, id);
-            //"blur" by down- and subsequent upscaling into a temp rt
-            RenderTargetIdentifier temp = new RenderTargetIdentifier(0);
-            shadowMapCommandBuffer.GetTemporaryRT(0, debug.width / 40, debug.height / 40, 16, FilterMode.Point, RenderTextureFormat.ARGB32);
-            shadowMapCommandBuffer.Blit(shadowMap, temp);
-            shadowMapCommandBuffer.Blit(temp, id);
-            shadowMapCommandBuffer.ReleaseTemporaryRT(0);
-            shadowMapCommandBuffer.SetGlobalTexture("_ShadowMapCopy", id);
-            light.AddCommandBuffer(LightEvent.AfterShadowMap, shadowMapCommandBuffer);
+        HandleDeferredRendering();
+    }
+
+    private void ShowDebug() {
+        Vector3[] vex = new Vector3[amountOfVertices];
+        Color[] colors = new Color[amountOfVertices];
+        vertexBuffer.GetData(vex);
+        Texture2D tex = new Texture2D(size, size);
+        for(int i = 0; i < vex.Length; i++) {
+            colors[i] = new Color(vex[i].x, vex[i].y, vex[i].z, 1);
         }
+        tex.SetPixels(colors);
+        tex.Apply();
+        Sprite sprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f));
+        GameObject computeCanvas = GameObject.Find("Canvas/Compute");
+        if(computeCanvas)
+            computeCanvas.GetComponent<Image>().sprite = sprite;
+        Destroy(tex);
+    }
+
+    private void Perlin() {
+        if (!perlinRT) { 
+            perlinRT = new RenderTexture(size, size, 0, RenderTextureFormat.ARGB32);
+            perlinRT.enableRandomWrite = true;
+            perlinRT.Create();
+            kPerlin = perlinComputeShader.FindKernel("main");
+            perlinComputeShader.SetTexture(kPerlin, "Result", perlinRT);
+            perlinComputeShader.SetVector("size", new Vector4(perlinRT.width, perlinRT.height, 0, 0));
+        }
+        perlinComputeShader.SetVector("offset", offset * Time.time);
+        perlinComputeShader.Dispatch(kPerlin, perlinRT.width / 32, perlinRT.height / 32, 1);
+        GameObject.Find("Canvas/RT").GetComponent<RawImage>().texture = perlinRT;
     }
 
 
     private void SetShadersAndBuffer() {
+        kCreatePositions = grassComputeShader.FindKernel("createPositions");
+        kUpdateBase = grassComputeShader.FindKernel("updateBase");
 
-        kCreatePositions = computeShader.FindKernel("createPositions");
-        kUpdateBase = computeShader.FindKernel("updateBase");
-
-        computeShader.SetInt("verticesSize", amountOfVertices);
-        computeShader.SetFloat("desiredSize", 10f);
-        computeShader.SetVector("camPos", cam.transform.position);
-        computeShader.SetVector("camForward", cam.transform.forward);
-        computeShader.SetVector("lightPos", light.transform.position);
+        grassComputeShader.SetInt("verticesSize", amountOfVertices);
+        grassComputeShader.SetFloat("desiredSize", desiredSize);
+        grassComputeShader.SetVector("camPos", cam.transform.position);
+        grassComputeShader.SetVector("camForward", cam.transform.forward);
+        grassComputeShader.SetVector("lightPos", light.transform.position);
+        grassComputeShader.SetVector("timeOffset", new Vector2(0.1f, 0.1f) * Time.time);
+        grassComputeShader.SetVector("worldPos", position);
+        grassComputeShader.SetVector("minPos", new Vector3(0, 0, 0));
+        grassComputeShader.SetVector("maxPos", new Vector3(20, 0, 20));
+        grassComputeShader.SetTexture(kCreatePositions, "perlinTex", perlinRT);
+        grassComputeShader.SetTexture(kUpdateBase, "perlinTex", perlinRT);
         //stores the base mesh vertices
         vertexBuffer = new ComputeBuffer(amountOfVertices, sizeof(float) * 3);
         //stores the grass mesh vertices, updated each frame
@@ -88,20 +106,14 @@ public class Grass : MonoBehaviour
 
         triangleBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index | GraphicsBuffer.Target.Structured, amountOfVertices * 4 * 6, sizeof(int));
 
-        computeShader.SetBuffer(kCreatePositions, "vertexBuffer", vertexBuffer);
-        computeShader.SetBuffer(kCreatePositions, "triangleBuffer", triangleBuffer);
-        computeShader.SetBuffer(kUpdateBase, "vertexBuffer", vertexBuffer);
-        computeShader.SetBuffer(kUpdateBase, "grassBuffer", grassBuffer);
+        grassComputeShader.SetBuffer(kCreatePositions, "vertexBuffer", vertexBuffer);
+        grassComputeShader.SetBuffer(kCreatePositions, "triangleBuffer", triangleBuffer);
+        grassComputeShader.SetBuffer(kUpdateBase, "vertexBuffer", vertexBuffer);
+        grassComputeShader.SetBuffer(kUpdateBase, "grassBuffer", grassBuffer);
         mat.SetBuffer("vertices", grassBuffer);
 
-
         //generate the positions mesh and the base grass mesh
-        computeShader.Dispatch(kCreatePositions, 1, 1, 1);
-
-
-        Vertex[] vertexs = new Vertex[amountOfVertices * 5 * 2];
-        grassBuffer.GetData(vertexs);
-
+        grassComputeShader.Dispatch(kCreatePositions, 1, 1, 1);
     }
 
     private void CreateDebugMesh() {
@@ -118,12 +130,20 @@ public class Grass : MonoBehaviour
     }
 
     private void Update() {
-        computeShader.SetVector("camPos", cam.transform.position);
-        computeShader.SetVector("camForward", cam.transform.forward);
-        computeShader.SetVector("lightPos", light.transform.position);
+        if (grassComputeShader == null)
+            return;
+
+        Graphics.SetRandomWriteTarget(1, perlinRT);
+        grassComputeShader.SetVector("camPos", cam.transform.position);
+        grassComputeShader.SetVector("camForward", cam.transform.forward);
+        grassComputeShader.SetVector("lightPos", light.transform.position);
         mat.SetVector("_lightDirection", light.transform.forward);
         mat.SetVector("_CameraPos", cam.transform.position);
-        computeShader.Dispatch(kUpdateBase, 1, 1, 1);
+        grassComputeShader.Dispatch(kUpdateBase, 1, 1, 1);
+
+        Graphics.ClearRandomWriteTargets();
+
+        Perlin();
     }
 
     private void OnDrawGizmos() {
@@ -142,12 +162,51 @@ public class Grass : MonoBehaviour
         Graphics.DrawProceduralNow(MeshTopology.Triangles, triangleBuffer, amountOfVertices * 6 * 4);
     }
 
+    private void HandleDeferredRendering() {
+        if (cam.renderingPath != RenderingPath.DeferredShading)
+            return;
 
+        shadowMapRT = new RenderTexture(512, 512, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+        shadowMapRT.enableRandomWrite = true;
+        shadowMapRT.Create();
+        cameraCommandBuffer = new CommandBuffer();
+        cameraCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 0, MeshTopology.Triangles, amountOfVertices * 6 * 4);
+        cam.AddCommandBuffer(CameraEvent.BeforeGBuffer, cameraCommandBuffer);
+
+        lightCommandBuffer = new CommandBuffer();
+        //TODO: create shadow map twice, once with and once without the grass
+        //grass should not get self shadow, as it is blocky and ugly
+        //see unity light examples for custom shadow casting?
+        //lightCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 1, MeshTopology.Triangles, amountOfVertices * 6 * 4);
+        light.AddCommandBuffer(LightEvent.BeforeShadowMapPass, lightCommandBuffer);
+
+        //copy shadow texture from lightsource into debug tex
+        //this way we can make it a global texture and easily access it in our shader
+        CommandBuffer shadowMapCommandBuffer = new CommandBuffer();
+        RenderTargetIdentifier shadowMap = BuiltinRenderTextureType.CurrentActive;
+        shadowMapCommandBuffer.SetShadowSamplingMode(shadowMap, ShadowSamplingMode.RawDepth);
+        var id = new RenderTargetIdentifier(shadowMapRT);
+        // shadowMapCommandBuffer.Blit(shadowMap, id);
+        //"blur" by down- and subsequent upscaling into a temp rt
+        /*
+        RenderTargetIdentifier temp = new RenderTargetIdentifier(0);
+        shadowMapCommandBuffer.GetTemporaryRT(0, -1, -1, 16, FilterMode.Bilinear, RenderTextureFormat.ARGB32);
+        shadowMapCommandBuffer.Blit(shadowMap, temp);
+        shadowMapCommandBuffer.Blit(temp, id);
+        shadowMapCommandBuffer.ReleaseTemporaryRT(0);
+        */
+        shadowMapCommandBuffer.Blit(shadowMap, shadowMapRT);
+        shadowMapCommandBuffer.SetGlobalTexture("_ShadowMapCopy", id);
+        light.AddCommandBuffer(LightEvent.AfterShadowMap, shadowMapCommandBuffer);
+    }
 
     private void OnDisable() {
         vertexBuffer.Release();
         grassBuffer.Release();
         triangleBuffer.Release();
         drawArgsBuffer.Release();
+        if(shadowMapRT != null)
+            shadowMapRT.Release();
+        perlinRT.Release();
     }
 }

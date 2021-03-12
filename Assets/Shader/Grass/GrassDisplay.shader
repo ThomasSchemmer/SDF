@@ -77,7 +77,7 @@ Shader "custom/GrassDisplay"
             //assumes 4 cascading shadows!
             //for more info see https://shahriyarshahrabi.medium.com/custom-shadow-mapping-in-unity-c42a81e1bbf8
             float calcReceivedShadow(float3 worldPos) {
-                float depth = length(worldPos - _CameraPos);
+                float depth = distance(worldPos,_CameraPos);
                 float4 near = float4(depth >= _LightSplitsNear);
                 float4 far = float4(depth < _LightSplitsFar);
                 float4 weights = near * far;
@@ -118,7 +118,6 @@ Shader "custom/GrassDisplay"
         {
             Tags{ "RenderType" = "Opaque" "LightMode" = "ShadowCaster"}
             LOD 100
-            Cull front
 
             CGPROGRAM
             #include "UnityCG.cginc"

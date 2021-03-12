@@ -1,0 +1,105 @@
+#pragma kernel main
+
+RWTexture2D<float4> Result;
+float2 size;
+float2 offset;
+
+float random(float2 uv)
+{
+    return frac(sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453123);
+}
+
+//taken from somewhere, but i forgot where
+float perlin(float3 worldPos);
+float perlinLoop(float3 worldPos, float Frequency, float Amplitude);
+//groupshared means "only shader can access it, but it is shared within the threadgroup"
+groupshared float3 vectors[12] = {
+    float3(1,1,0), float3(-1,1,0), float3(1,-1,0), float3(-1,-1,0),
+    float3(1,0,1), float3(-1,0,1), float3(1,0,-1), float3(-1,0,-1),
+    float3(0,1,1), float3(0,-1,1), float3(0,1,-1), float3(0,-1,-1)
+};
+
+groupshared uint p[256] = { 151,160,137,91,90,15,
+    131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,8,99,37,240,21,10,23,
+    190, 6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,57,177,33,
+    88,237,149,56,87,174,20,125,136,171,168, 68,175,74,165,71,134,139,48,27,166,
+    77,146,158,231,83,111,229,122,60,211,133,230,220,105,92,41,55,46,245,40,244,
+    102,143,54, 65,25,63,161, 1,216,80,73,209,76,132,187,208, 89,18,169,200,196,
+    135,130,116,188,159,86,164,100,109,198,173,186, 3,64,52,217,226,250,124,123,
+    5,202,38,147,118,126,255,82,85,212,207,206,59,227,47,16,58,17,182,189,28,42,
+    223,183,170,213,119,248,152, 2,44,154,163, 70,221,153,101,155,167, 43,172,9,
+    129,22,39,253, 19,98,108,110,79,113,224,232,178,185, 112,104,218,246,97,228,
+    251,34,242,193,238,210,144,12,191,179,162,241, 81,51,145,235,249,14,239,107,
+    49,192,214, 31,181,199,106,157,184, 84,204,176,115,121,50,45,127, 4,150,254,
+    138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180
+};
+
+
+
+
+float fade(float t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+float grad(uint hash, float x, float y, float z) {
+    float3 v = vectors[(hash & 0xF) % 12];
+    return v.x * x + v.y * y + v.z * z;
+}
+
+float perlin(float3 worldPos) {
+    uint3 xyzi = uint3(abs(worldPos.x) % 256, abs(worldPos.y) % 256, abs(worldPos.z) % 256);
+
+    float3 xyzf = float3(abs(worldPos.x) - xyzi.x, abs(worldPos.y) - xyzi.y, abs(worldPos.z) - xyzi.z);
+    float3 uvw = float3(fade(xyzf.x), fade(xyzf.y), fade(xyzf.z));
+
+    uint aaa, aab, aba, abb, baa, bab, bba, bbb;
+    aaa = p[p[p[xyzi.x] + xyzi.y] + xyzi.z];
+    aba = p[p[p[xyzi.x] + xyzi.y + 1] + xyzi.z];
+    aab = p[p[p[xyzi.x] + xyzi.y] + xyzi.z + 1];
+    abb = p[p[p[xyzi.x] + xyzi.y + 1] + xyzi.z + 1];
+    baa = p[p[p[xyzi.x + 1] + xyzi.y] + xyzi.z];
+    bba = p[p[p[xyzi.x + 1] + xyzi.y + 1] + xyzi.z];
+    bab = p[p[p[xyzi.x + 1] + xyzi.y] + xyzi.z + 1];
+    bbb = p[p[p[xyzi.x + 1] + xyzi.y + 1] + xyzi.z + 1];
+
+
+    float a, b, c1, c2;
+    a = lerp(grad(aaa, xyzf.x, xyzf.y, xyzf.z),
+        grad(baa, xyzf.x - 1, xyzf.y, xyzf.z), uvw.x);
+    b = lerp(grad(aba, xyzf.x, xyzf.y - 1, xyzf.z),
+        grad(bba, xyzf.x - 1, xyzf.y - 1, xyzf.z), uvw.x);
+    c1 = lerp(a, b, uvw.y);
+    a = lerp(grad(aab, xyzf.x, xyzf.y, xyzf.z - 1),
+        grad(bab, xyzf.x - 1, xyzf.y, xyzf.z - 1), uvw.x);
+    b = lerp(grad(abb, xyzf.x, xyzf.y - 1, xyzf.z - 1),
+        grad(bbb, xyzf.x - 1, xyzf.y - 1, xyzf.z - 1), uvw.x);
+    c2 = lerp(a, b, uvw.y);
+
+    return (lerp(c1, c2, uvw.z) + 1) / 2;
+}
+
+float perlinLoop(float3 worldPos, float Frequency, float Amplitude) {
+    float total = 0;
+    float maxValue = 0;
+    float frequency = 1;
+    float amplitude = 1;
+    for (int i = 0; i < Frequency; i++) {
+        total += perlin(worldPos * frequency) * amplitude;
+        maxValue += amplitude;
+        amplitude *= Amplitude;
+        frequency *= 2;
+    }
+    return total / maxValue;
+}
+
+
+
+
+[numthreads(32,32,1)]
+void main (uint3 id : SV_DispatchThreadID)
+{
+    float3 pos = float3(id.x / size.x + offset.x, 0, id.y / size.y + offset.y);
+    pos.x = fmod(pos.x, 1) < 0.01 ? pos.x + 0.01 : pos.x;
+    pos.z = fmod(pos.z, 1) < 0.01 ? pos.z + 0.01 : pos.z;
+    Result[id.xy] = float4(perlinLoop(pos, 3, 2), 0, 0, 1);
+}
