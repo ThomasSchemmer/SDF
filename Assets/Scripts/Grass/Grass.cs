@@ -174,10 +174,7 @@ public class Grass : MonoBehaviour
         cam.AddCommandBuffer(CameraEvent.BeforeGBuffer, cameraCommandBuffer);
 
         lightCommandBuffer = new CommandBuffer();
-        //TODO: create shadow map twice, once with and once without the grass
-        //grass should not get self shadow, as it is blocky and ugly
-        //see unity light examples for custom shadow casting?
-        //lightCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 1, MeshTopology.Triangles, amountOfVertices * 6 * 4);
+        lightCommandBuffer.DrawProcedural(triangleBuffer, Matrix4x4.identity, mat, 1, MeshTopology.Triangles, amountOfVertices * 6 * 4);
         light.AddCommandBuffer(LightEvent.BeforeShadowMapPass, lightCommandBuffer);
 
         //copy shadow texture from lightsource into debug tex
@@ -208,5 +205,7 @@ public class Grass : MonoBehaviour
         if(shadowMapRT != null)
             shadowMapRT.Release();
         perlinRT.Release();
+        cam.RemoveAllCommandBuffers();
+        light.RemoveAllCommandBuffers();
     }
 }
