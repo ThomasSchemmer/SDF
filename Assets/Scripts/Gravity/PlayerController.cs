@@ -14,6 +14,7 @@ public class PlayerController : MonoBehaviour
     public float maxStairAngle = 50;
     public float maxSnapSpeed = 100;
     public Vector2 turnRate = new Vector2(25, 5);
+    public Vector2 turnOffset = new Vector2(0, 10);
     public Camera orbitCamera;
 
     private Vector3 velocity = new Vector3();
@@ -38,6 +39,8 @@ public class PlayerController : MonoBehaviour
     private Transform focus;
 
     private Rigidbody rb;
+    private Vector2 screenSize;
+    private int worldLayerMask;
 
     private void Awake() {
         rb = GetComponent<Rigidbody>();
@@ -46,7 +49,9 @@ public class PlayerController : MonoBehaviour
         focus = this.transform.GetChild(0);
         minGroundDotProduct = Mathf.Cos(maxGroundAngle * Mathf.Deg2Rad);
         minStairDotProduct = Mathf.Cos(maxStairAngle * Mathf.Deg2Rad);
-        
+
+        screenSize = GetMainGameViewSize();
+        worldLayerMask = LayerMask.GetMask("World");
     }
 
     private void Start() {
@@ -93,12 +98,14 @@ public class PlayerController : MonoBehaviour
         playerInput.z = Input.GetAxis("Vertical");
         playerInput = Vector3.ClampMagnitude(playerInput, 1);
         desiredVelocity = playerInput * maxVelocity;
-
-            desiredAngles = new Vector2() {
-                x = Input.GetAxis("Mouse X") * turnRate.x,
-                y = Input.GetAxis("Mouse Y") * turnRate.y
-            };
-
+        //map current mouse position into [-1..1] range
+        desiredAngles = ((Vector2)Input.mousePosition - screenSize / 2f) / (screenSize / 2f);
+        if (Mathf.Abs(desiredAngles.x) < 0.1f)
+            desiredAngles.x = 0;
+        desiredAngles.x = Mathf.Clamp(desiredAngles.x, -1, 1);
+        desiredAngles.y = Mathf.Clamp(desiredAngles.y, -1, 1);
+        desiredAngles = desiredAngles * turnRate + turnOffset;
+       
         desiredJump |= Input.GetButtonDown("Jump");
     }
 
@@ -117,8 +124,8 @@ public class PlayerController : MonoBehaviour
         }
 
         float jumpSpeed = Mathf.Sqrt(2f * gravity.magnitude * maxJumpHeight);
-        float alignedSpeed = Vector3.Dot(velocity, new Vector3(0, jumpDirection.y, 0));
-         if (alignedSpeed > 0f)
+        float alignedSpeed = Vector3.Dot(velocity, contactNormal);  //new Vector3(0, jumpDirection.y, 0)
+        if (alignedSpeed > 0f)
             jumpSpeed = Mathf.Max(jumpSpeed - alignedSpeed, 0f);
         velocity = jumpSpeed * jumpDirection;
         jumpPhase++;
@@ -173,21 +180,22 @@ public class PlayerController : MonoBehaviour
     }
 
     private void CalculateRotation() {
-        bool raycasted = true;
         RaycastHit first, second;
-        if (!Physics.Raycast(transform.position, -upAxis, out first, 1))
+        bool raycasted = true;
+        if (!Physics.Raycast(transform.position, -upAxis, out first, 1, worldLayerMask))
             raycasted = false;
-        if (!Physics.Raycast(focus.position, -upAxis, out second, 2))
+        if(!Physics.Raycast(focus.position, -upAxis, out second, 1, worldLayerMask)) 
             raycasted = false;
 
         //Calculate orientation of player by using ground as plane on which mouse x movement rotates players forward vector
-        Vector3 alignedForward = IsOnGround ? (second.point - first.point).normalized : transform.forward;
+        Vector3 alignedForward = (IsOnGround & raycasted) ?
+            (second.point - first.point).normalized : transform.forward;
         alignedForward = Quaternion.AngleAxis(desiredAngles.x, upAxis) * alignedForward;
         Quaternion playerLook = Quaternion.LookRotation(alignedForward, upAxis);
 
 
         float angle = Quaternion.Angle(rotation, playerLook);
-        float smoothAlignment = 180;
+        float smoothAlignment = 5;
 
         float t = 1f;
         if (angle > 0.01f) {
@@ -272,11 +280,15 @@ public class PlayerController : MonoBehaviour
         return desiredAngles;
     }
 
+
     private static Vector2 GetMainGameViewSize() {
-        System.Type T = System.Type.GetType("UnityEditor.GameView,UnityEditor");
-        System.Reflection.MethodInfo GetSizeOfMainGameView = T.GetMethod("GetSizeOfMainGameView", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        System.Object Res = GetSizeOfMainGameView.Invoke(null, null);
-        return (Vector2)Res;
+        if (Application.isEditor) {
+            System.Type T = System.Type.GetType("UnityEditor.GameView,UnityEditor");
+            System.Reflection.MethodInfo GetSizeOfMainGameView = T.GetMethod("GetSizeOfMainGameView", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            System.Object Res = GetSizeOfMainGameView.Invoke(null, null);
+            return (Vector2)Res;
+        }
+        return new Vector2(Screen.width, Screen.height);
     }
 
 }

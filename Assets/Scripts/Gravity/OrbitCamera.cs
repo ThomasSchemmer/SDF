@@ -8,6 +8,7 @@ public class OrbitCamera : MonoBehaviour
 {
     public Transform focus;
     public PlayerController player;
+    public float maxAngle = 60;
     float distance = 2;
 
     float focusRadius = 1f;
@@ -66,12 +67,13 @@ public class OrbitCamera : MonoBehaviour
 
     Quaternion AutomaticRotation() {
         //Calculate orbit camera look, which is a translated transform of the player, influenced by the mouse y movement (rotated around right axis)
-        orbitAngles += player.GetDesiredAngles();
-        orbitAngles.y = Mathf.Clamp(orbitAngles.y, -25, 25);
+        orbitAngles = player.GetDesiredAngles();
+
         Vector3 cameraUp = Quaternion.AngleAxis(orbitAngles.y, player.transform.right) * focus.up;
         Vector3 cameraForward = Quaternion.AngleAxis(orbitAngles.y, player.transform.right) * focus.forward;
 
         Quaternion goal = Quaternion.LookRotation(cameraForward, cameraUp);
+
         return goal;
     }
 

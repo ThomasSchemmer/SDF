@@ -5,22 +5,29 @@ using UnityEngine;
 public class CustomGravity 
 {
     private static List<GravitySource> sources = new List<GravitySource>();
-
+    private static Vector3 lastUpVector = Vector3.up;
 
     public static Vector3 GetGravity(Vector3 position) {
         Vector3 res = new Vector3();
-        foreach(var source in sources) {
-            res += source.GetGravity(position);
+        bool totalInRange = false;
+        foreach (var source in sources) {
+            res += source.GetGravity(position, out bool sourceInRange);
+            totalInRange |= sourceInRange;
         }
         return res;
     }
 
     public static Vector3 GetUpAxis(Vector3 position) {
         Vector3 res = new Vector3();
+        bool totalInRange = false;
         foreach (var source in sources) {
-            res += source.GetUpAxis(position);
+            res += source.GetUpAxis(position, out bool sourceInRange);
+            totalInRange |= sourceInRange;
         }
-        return res;
+        res = res.normalized;
+        if (totalInRange)
+            lastUpVector = res;
+        return lastUpVector;
     }
 
     public static Vector3 GetGravity(Vector3 position, out Vector3 upAxis) {
