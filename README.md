@@ -9,3 +9,6 @@ Started with a raycaster as vertex shader to display SDF's, but now includes:
   * Procedural drawing, directly hooked into pipeline
   * ComputeShader to dynamically update grass
   * perlin noise texture to represent wind
+
+Image Splicing Effect <br>
+<img src="https://github.com/ThomasSchemmer/SDF/blob/master/splicing.gif" width="256" height="256" />
