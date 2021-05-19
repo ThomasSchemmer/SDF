@@ -1,0 +1,87 @@
+#pragma kernel Draw
+#pragma kernel Update
+#pragma kernel Clear
+
+struct Particle {
+    float2 position;
+    float2 velocity;
+    float2 origin;
+};
+
+int particleAmount;
+float2 worldExtent;
+uint groupX, groupY;
+uint width;
+uint height;
+float deltaTime;
+RWTexture2D<float4> Result;
+RWStructuredBuffer<Particle> particles;
+
+float3 WorldToPixel(float2 worldPos) {
+    float2 scale = float2(worldPos.x / worldExtent.x, worldPos.y / worldExtent.y);
+    float r = (abs(scale.x) < 1) && (abs(scale.y < 1)) ? 1 : 0;
+    return float3((1 + scale.x) * width / 2, (1 + scale.y) * height / 2, r);
+}
+
+bool IsInPixel(int i, int2 pix) {
+    float2 pos = WorldToPixel(particles[i].position).xy;
+    return pix.x < pos.x&& pix.y < pos.y &&
+        pix.x + 1 >= pos.x && pix.y + 1 >= pos.y;
+}
+
+[numthreads(8,8,1)]
+void Clear (uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
+{
+    uint2 pixelPerGroup = uint2(width / groupX, height / groupY);
+    uint2 pixelPerThread = uint2(ceil(pixelPerGroup.x / 8.0), ceil(pixelPerGroup.y / 8.0));
+
+    uint2 indexGroup = uint2(groupID.x * pixelPerGroup.x, groupID.y * pixelPerGroup.y);
+    uint2 index = indexGroup + uint2(threadID.x * pixelPerThread.x, threadID.y * pixelPerThread.y);
+
+    float4 c = float4(0, 0, 0, 1);
+    for (uint y = 0; y < pixelPerThread.y; y++) {
+        uint indexY = index.y + y;
+        for (uint x = 0; x < pixelPerThread.x; x++) {
+            uint indexX = index.x + x;
+            Result[int2(indexX, indexY)] = c;
+        }
+    }
+}
+
+// see DrawKernel
+[numthreads(16, 16, 1)]
+void Update(uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+    uint amountPerGroup = particleAmount / (groupX * groupY);
+    uint amountPerThread = ceil(amountPerGroup / (16 * 16));
+
+    uint indexGroup = groupID.y * groupX * amountPerGroup + groupID.x * amountPerGroup;
+    uint index = indexGroup + threadID.y * 16 * amountPerThread + threadID.x * amountPerThread;
+
+    for (uint i = index; i < index + amountPerThread; i++) {
+        particles[i].position += particles[i].velocity * deltaTime;
+    }
+}
+
+/*
+    Iterates through all particles, but split into groups and threads.
+    Both are indexed the same way: 
+     [][][][][][]->
+   ->[][][][][][]... where row = y, column = x
+    Total amount of particles should be a multiple of 512 (Group * Thread), 
+    otherwise particles might be overlooked due to float-precision
+*/
+
+[numthreads(16, 16, 1)]
+void Draw(uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+    uint amountPerGroup = particleAmount / (groupX * groupY);
+    uint amountPerThread = ceil(amountPerGroup / (16 * 16));
+
+    uint indexGroup = groupID.y * groupX * amountPerGroup + groupID.x * amountPerGroup;
+    uint index = indexGroup + threadID.y * 16 * amountPerThread + threadID.x * amountPerThread;
+
+    for (uint i = index; i < index + amountPerThread; i++) {
+        float3 pix = WorldToPixel(particles[i].position);
+        Result[uint2((uint)pix.x, (uint)pix.y)] = float4(pix.z, 0, 0, 1);
+    }
+}
+
