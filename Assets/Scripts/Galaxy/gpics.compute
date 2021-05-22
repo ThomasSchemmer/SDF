@@ -1,0 +1,80 @@
+#pragma kernel Partition
+#pragma kernel CreateNodes
+
+struct Particle {
+    float2 position;
+    float2 velocity;
+    float2 origin;
+    uint currentNode;
+};
+
+struct Node {
+    float2 center;
+    float width;
+    uint id;
+    uint split;
+    uint count;
+};
+
+RWTexture2D<float4> Result;
+RWStructuredBuffer<Particle> particles;
+RWStructuredBuffer<Node> nodes;
+RWStructuredBuffer<float> debug;
+
+uint particleAmount, maxTreeDepth, maxParticlesInNode;
+uint groupX, groupY;
+
+float GetNodeID(Particle p) {
+    uint id = 0;    //root node
+    uint x, y;
+    for (uint i = 0; i < maxTreeDepth; i++) {
+        x = p.position.x > nodes[id].center.x ? 1 : 0;
+        y = p.position.y > nodes[id].center.y ? 1 : 0;
+        uint childID = id * 4 + x + (1 - y) * 2;
+
+        id = nodes[id].split * childID + (1 - nodes[id].split) * id;
+    }
+    return id;
+}
+
+[numthreads(8,8,1)]
+void Partition (uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
+{
+
+    uint amountPerGroup = particleAmount / (groupX * groupY);
+    uint amountPerThread = ceil(amountPerGroup / (8 * 8));
+
+    uint indexGroup = groupID.y * groupX * amountPerGroup + groupID.x * amountPerGroup;
+    uint index = indexGroup + threadID.y * 8 * amountPerThread + threadID.x * amountPerThread;
+    for (uint i = index; i < index + amountPerThread; i++) {
+        float id = GetNodeID(particles[i]);
+        uint count, oldSplit;
+        InterlockedAdd(nodes[id].count, 1, count);
+        count = min(count + 1, 1);
+        InterlockedExchange(nodes[id].split, count, oldSplit);
+    }
+}
+
+[numthreads(1, 1, 1)]
+void CreateNodes() {
+    uint size = (uint)((pow(4, maxTreeDepth) - 1) / 3);
+    for (uint id = 1; id < size; id++) {
+        uint parentID = floor((id - 1) / 4);
+        int x = fmod(fmod(id - 1, 4), 2);
+        int y = fmod(id - 1, 4) < 2 ? 1 : 0;
+        x = 2 * x - 1;  //remap from 0..1 -> -1 .. 1
+        y = 2 * y - 1;
+        float newX = nodes[parentID].center.x + x * nodes[parentID].width / 4.0;
+        float newY = nodes[parentID].center.y + y * nodes[parentID].width / 4.0;
+
+        bool newNode = nodes[parentID].split == 1;
+        Node node;
+        node.center = newNode ? float2(newX, newY) : nodes[id].center;
+        node.width = newNode ? nodes[parentID].width / 2 : nodes[id].width; 
+        node.id = id;
+        node.split = newNode ? 0 : nodes[id].split;
+        node.count = newNode ? 0 : nodes[id].count;
+        nodes[id] = node;
+    }
+}
+
