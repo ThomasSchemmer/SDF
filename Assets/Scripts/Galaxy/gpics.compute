@@ -1,5 +1,7 @@
 #pragma kernel Partition
 #pragma kernel CreateNodes
+#pragma kernel UpdateDataOffsets
+#pragma kernel FillDataPoints
 
 struct Particle {
     float2 position;
@@ -11,70 +13,123 @@ struct Particle {
 struct Node {
     float2 center;
     float width;
-    uint id;
-    uint split;
-    uint count;
+    uint created;
+    uint split; 
+    uint count;     //how many unordered points are allocated to the node, including its children?
+    uint dataCount; //how many of these points are ordered and only allocated in the leaf node?
+    uint dataOffset;//how many points of the parent node are allocated before this node's points?
 };
 
 RWTexture2D<float4> Result;
 RWStructuredBuffer<Particle> particles;
 RWStructuredBuffer<Node> nodes;
 RWStructuredBuffer<float> debug;
+RWStructuredBuffer<float> xValues;
+RWStructuredBuffer<float> yValues;
 
 uint particleAmount, maxTreeDepth, maxParticlesInNode;
 uint groupX, groupY;
 
-float GetNodeID(Particle p) {
+uint GetNodeID(Particle p) {
     uint id = 0;    //root node
     uint x, y;
     for (uint i = 0; i < maxTreeDepth; i++) {
         x = p.position.x > nodes[id].center.x ? 1 : 0;
         y = p.position.y > nodes[id].center.y ? 1 : 0;
-        uint childID = id * 4 + x + (1 - y) * 2;
+        uint childID = id * 4 + x + (1 - y) * 2 + 1;
 
         id = nodes[id].split * childID + (1 - nodes[id].split) * id;
     }
     return id;
 }
 
+//each thread updates the indices of all the data points, as well as updates the counter in 
+//the corresponding nodes. If a node has too many points, it has to be split apart.
 [numthreads(8,8,1)]
 void Partition (uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
 {
-
     uint amountPerGroup = particleAmount / (groupX * groupY);
     uint amountPerThread = ceil(amountPerGroup / (8 * 8));
 
     uint indexGroup = groupID.y * groupX * amountPerGroup + groupID.x * amountPerGroup;
     uint index = indexGroup + threadID.y * 8 * amountPerThread + threadID.x * amountPerThread;
     for (uint i = index; i < index + amountPerThread; i++) {
-        float id = GetNodeID(particles[i]);
+        uint id = GetNodeID(particles[i]);
         uint count, oldSplit;
         InterlockedAdd(nodes[id].count, 1, count);
-        count = min(count + 1, 1);
-        InterlockedExchange(nodes[id].split, count, oldSplit);
+        uint newSplit = (count + 1) >= maxParticlesInNode ? 1 : 0;
+        InterlockedExchange(nodes[id].split, newSplit, oldSplit);
+        particles[i].currentNode = id;
     }
 }
 
+//fills up all new nodes, but only if parent node has to be split
+//and the node itself has not been init before
 [numthreads(1, 1, 1)]
 void CreateNodes() {
     uint size = (uint)((pow(4, maxTreeDepth) - 1) / 3);
+    uint dataOffset = 0;
+    uint lastParentID = 0;
     for (uint id = 1; id < size; id++) {
         uint parentID = floor((id - 1) / 4);
+        dataOffset = lastParentID == parentID ? dataOffset : 0;
+        lastParentID = parentID;
+
+        //calculate quadrant position, nr = x + (1-y) * 2 + 1
         int x = fmod(fmod(id - 1, 4), 2);
         int y = fmod(id - 1, 4) < 2 ? 1 : 0;
-        x = 2 * x - 1;  //remap from 0..1 -> -1 .. 1
+        //remap from 0..1 -> -1 .. 1, as we either add or substract the offset to get the new center
+        x = 2 * x - 1;  
         y = 2 * y - 1;
         float newX = nodes[parentID].center.x + x * nodes[parentID].width / 4.0;
         float newY = nodes[parentID].center.y + y * nodes[parentID].width / 4.0;
 
-        bool newNode = nodes[parentID].split == 1;
+        bool newNode = nodes[parentID].split == 1 && nodes[id].created == 0;
         Node node;
         node.center = newNode ? float2(newX, newY) : nodes[id].center;
         node.width = newNode ? nodes[parentID].width / 2 : nodes[id].width; 
-        node.id = id;
+        node.created = newNode ? 1 : nodes[id].created;
         node.split = newNode ? 0 : nodes[id].split;
         node.count = newNode ? 0 : nodes[id].count;
+        node.dataCount = newNode ? 0 : nodes[id].dataCount;
+        node.dataOffset = newNode ? 0 : nodes[id].dataOffset;
         nodes[id] = node;
+        debug[id] = newNode ? 1 : 0;
+    }
+
+
+}
+
+
+[numthreads(1, 1, 1)]
+void UpdateDataOffsets() {
+    uint size = (uint)((pow(4, maxTreeDepth) - 1) / 3);
+    uint dataCount = 0;
+    uint lastParentID = 0;
+    for (uint id = 1; id < size; id++) {
+        uint parentID = floor((id - 1) / 4);
+        dataCount = lastParentID == parentID ? dataCount : 0;
+        lastParentID = parentID;
+
+        nodes[id].dataOffset = nodes[parentID].dataOffset + dataCount;
+        dataCount = dataCount + nodes[id].count;
+    }
+
+}
+
+[numthreads(8, 8, 1)]
+void FillDataPoints(uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+    uint amountPerGroup = particleAmount / (groupX * groupY);
+    uint amountPerThread = ceil(amountPerGroup / (8 * 8));
+
+    uint indexGroup = groupID.y * groupX * amountPerGroup + groupID.x * amountPerGroup;
+    uint index = indexGroup + threadID.y * 8 * amountPerThread + threadID.x * amountPerThread;
+    for (uint i = index; i < index + amountPerThread; i++) {
+        uint oldDataCount = 0;
+        uint nodeID = particles[i].currentNode;
+        InterlockedAdd(nodes[nodeID].dataCount, 1, oldDataCount);
+        xValues[nodes[nodeID].dataOffset + oldDataCount] = particles[i].position.x;
+        yValues[nodes[nodeID].dataOffset + oldDataCount] = particles[i].position.y;
     }
 }
 
