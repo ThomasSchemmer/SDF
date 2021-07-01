@@ -37,7 +37,7 @@ Shader "Custom/TransformerShader"
             };
 
             sampler2D _OriginTex, _TargetTex;
-            float4 _OriginTex_ST, _TargetTex_ST;
+            float4 _OriginTex_ST, _TargetTex_ST, _MainTex_ST;
             float _T;
 
             v2f vert (appdata v)

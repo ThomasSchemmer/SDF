@@ -1,0 +1,30 @@
+#pragma kernel FillTex
+
+RWTexture3D<float4> result;
+uint size;
+
+[numthreads(8,8,8)]
+void FillTex (uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
+{
+
+    //find from which pixels we have to start, according to group and thread size
+    uint3 amountPerGroup = uint3(size / 8, size / 8, size / 8);
+    uint3 amountPerThread = uint3(amountPerGroup.x / 8, amountPerGroup.y / 8, amountPerGroup.z / 8);
+
+    uint3 index = uint3(groupID.x * amountPerGroup.x, 
+                        groupID.y * amountPerGroup.y,
+                        groupID.z * amountPerGroup.z);
+    index += uint3(threadID.x * amountPerThread.x, 
+                    threadID.y * amountPerThread.y,
+                    threadID.z * amountPerThread.z);
+
+    for (uint z = index.z; z < index.z + amountPerThread.z; z++) {
+        for (uint y = index.y; y < index.y + amountPerThread.y; y++) {
+            for (uint x = index.x; x < index.x + amountPerThread.x; x++) {
+                float s = (float)size;
+                result[uint3(x, y, z)] = float4(x / s, y / s, z / s, 1);
+            }
+        }
+    }
+
+}
